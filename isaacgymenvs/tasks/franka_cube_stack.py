@@ -733,7 +733,6 @@ def compute_franka_reward(
     stack_reward = cubeA_align_cubeB & cubeA_on_cubeB & gripper_away_from_cubeA
 
     # Compose rewards
-
     # We either provide the stack reward or the align + dist reward
     rewards = torch.where(
         stack_reward,
