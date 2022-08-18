@@ -14,8 +14,7 @@ class FrankaReach(FrankaBase):
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless, virtual_screen_capture, force_render):
         # Euclidian distance < threshold, we regard task are completed
         self.threshold = 0.005
-        self.max_dist = 2.0
-        self.reward_scale = 10.0
+        self.max_dist = 1.0
 
         super().__init__(cfg, rl_device, sim_device, graphics_device_id, headless, virtual_screen_capture, force_render)
 
@@ -57,7 +56,7 @@ class FrankaReach(FrankaBase):
         eef_state_t = self._eef_state[:, :3]
 
         self.rew_buf[:], self.reset_buf[:] = \
-            compute_reward(eef_target_t, eef_state_t, self.max_dist, self.reward_scale,
+            compute_reward(eef_target_t, eef_state_t, self.max_dist,
                            self.threshold, self.max_episode_length, self.progress_buf, self.reset_buf)
 
     def _customized_asset(self):
@@ -85,17 +84,20 @@ class FrankaReach(FrankaBase):
 
 @torch.jit.script
 def compute_reward(eef_target_t: Tensor, eef_state_t: Tensor, max_dist: float,
-                   reward_scale: float, threshold: float, max_episode_length: float,
+                   threshold: float, max_episode_length: float,
                    progress_buf: Tensor, reset_buf: Tensor) -> Tuple[Tensor, Tensor]:
-    eucli_dist = torch.norm(eef_target_t - eef_state_t, dim=1)
+    euclidian_dist = torch.norm(eef_target_t - eef_state_t, dim=1)
 
-    reward = (max_dist - eucli_dist) * max_episode_length / (max_dist * (progress_buf + 1))
-    reward = torch.where(eucli_dist <= threshold,
-                         torch.ones_like(reward) * max_episode_length, reward)
+    dist_reward = (max_dist - euclidian_dist) / max_dist
+    win_mask = euclidian_dist <= threshold
+    timeout_mask = progress_buf >= max_episode_length - 1
+    abort_mask = dist_reward <= 0
+
+    reward = dist_reward + win_mask * (max_episode_length - progress_buf)
 
     # Compute resets
     reset_buf = torch.where(
-        (progress_buf >= max_episode_length - 1) | (eucli_dist <= threshold) | (reward <= 0),
+        timeout_mask | win_mask | abort_mask,
         torch.ones_like(reset_buf), reset_buf)
 
     return reward, reset_buf
