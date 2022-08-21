@@ -55,6 +55,14 @@ class SimplePolicyGradient:
         log_prob = self.get_policy(obs).log_prob(act)
         return -(log_prob * weights).mean()
 
+    @staticmethod
+    def reward_to_go(rewards):
+        n = len(rewards)
+        rtgs = np.zeros_like(rewards)
+        for i in reversed(range(n)):
+            rtgs[i] = rewards[i] + (rtgs[i + 1] if i + 1 < n else 0)
+        return rtgs
+
     # for training policy
     def train_one_epoch(self, optimizer) -> (Tuple, List, List):
         # make some empty lists for logging.
@@ -95,8 +103,10 @@ class SimplePolicyGradient:
                 batch_rets.append(ep_ret)
                 batch_lens.append(ep_len)
 
-                # the weight for each logprob(a|s) is R(tau)
-                batch_weights += [ep_ret] * ep_len
+                # # the weight for each logprob(a|s) is R(tau)
+                # batch_weights += [ep_ret] * ep_len
+                # the weight for each logprob(a_t|s_t) is reward-to-go from t
+                batch_weights += list(self.reward_to_go(ep_rewards))
 
                 # reset episode-specific variables
                 obs, done, ep_rewards = self.env.reset(), False, []
