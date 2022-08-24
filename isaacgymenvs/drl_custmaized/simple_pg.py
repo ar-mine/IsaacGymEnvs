@@ -4,9 +4,11 @@ from torch.optim import Adam
 import numpy as np
 import gym
 from gym.spaces import Discrete, Box
-from typing import Optional, List, Tuple
-from models import MLPCategoricalActor, combined_shape, discount_cumsum
+from typing import Optional
+from models import MLPCategoricalActor, combined_shape, discount_cumsum, count_vars, increment_cumsum
 import hydra
+from logger import EpochLogger
+import time
 
 
 class SPGBuffer:
@@ -16,7 +18,7 @@ class SPGBuffer:
        for calculating the advantages of state-action pairs.
        """
 
-    def __init__(self, obs_dim, act_dim, size, gamma=0.99):
+    def __init__(self, obs_dim, act_dim, size, gamma=0.95):
         # For discrete space, act_dim = 1(classification)
         act_dim = 1
         self.obs_buf = np.zeros(combined_shape(size, obs_dim), dtype=np.float32)
@@ -57,7 +59,6 @@ class SPGBuffer:
         rews = np.append(self.rew_buf[path_slice], last_val)
 
         # the next line computes rewards-to-go, to be targets for the value function
-        # self.ret_buf[path_slice] = np.sum(rews[:-1])
         self.ret_buf[path_slice] = discount_cumsum(rews, self.gamma)[:-1]
 
         self.path_start_idx = self.ptr
@@ -75,8 +76,12 @@ class SPGBuffer:
 
 
 class SimplePolicyGradient:
-    def __init__(self, cfg):
+    def __init__(self, cfg, logger_kwargs=None):
+        if logger_kwargs is None:
+            logger_kwargs = dict()
         self.cfg = cfg
+        self.logger = EpochLogger(logger_kwargs)
+        # self.logger.save_config(locals())
 
         # Will be loaded from cfg later
         self.env_name = self.cfg['env_name']
@@ -86,6 +91,7 @@ class SimplePolicyGradient:
         self.batch_size = self.cfg['batch_size']
         self.render = self.cfg['render']
         self.device = torch.device(self.cfg['device'])
+        self.save_freq = self.cfg['save_freq']
 
         # Env loader
         self.env = None
@@ -98,6 +104,13 @@ class SimplePolicyGradient:
         self.actor, self.buffer = self.create_estimator()
 
         self.pi_optimizer = Adam(self.actor.parameters(), lr=self.lr)
+
+        # Count variables
+        var_counts = count_vars(self.actor)
+        self.logger.log('\nNumber of parameters: \t pi: %d\n' % var_counts)
+
+        # Set up model saving
+        self.logger.setup_pytorch_saver(self.actor)
 
     def create_env(self):
         # make environment, check spaces, get obs / act dims
@@ -128,32 +141,34 @@ class SimplePolicyGradient:
         return loss_pi
 
     @staticmethod
-    def reward_to_go(rewards):
-        n = len(rewards)
-        rtgs = np.zeros_like(rewards)
-        for i in reversed(range(n)):
-            rtgs[i] = rewards[i] + (rtgs[i + 1] if i + 1 < n else 0)
-        return rtgs
+    def reward_modify(obs):
+        pos_rew = obs[0]+0.5
+        pos_rew = (pos_rew + 1)**2 if pos_rew >= 0 else pos_rew
+        vel_rew = abs(obs[1])/0.07
+        # reward += alpha*(0.6 - obs[0])/1.8 + (1-alpha)*abs(obs[1])/0.07
+        # reward += alpha*abs(obs[1])/0.07
+        return pos_rew+vel_rew-0.2
 
     # for training policy
-    def train_one_epoch(self) -> (Tuple, List, List):
-        # make some empty lists for logging.
-        batch_rets = []  # for measuring episode returns
-        batch_lens = []  # for measuring episode lengths
-
+    def train_one_epoch(self):
         # reset episode-specific variables
         obs, done, ep_ret, ep_len = self.env.reset(), False, 0, 0  # first obs comes from starting distribution
+        finished_rendering_this_epoch = False
 
         # collect experience by acting in the environment with current policy
         for t in range(self.batch_size):
             # rendering
-            if self.render:
+            if self.render and (not finished_rendering_this_epoch):
                 self.env.render()
 
             # act in the environment
             act, logp = self.actor.step(torch.as_tensor(obs, dtype=torch.float32, device=self.device))
             act, logp = act.cpu().numpy(), logp.cpu().numpy()
             obs_next, reward, done, _ = self.env.step(act)
+
+            # Modify the reward based on specific task
+            reward = self.reward_modify(obs)
+
             ep_ret += reward
             ep_len += 1
 
@@ -163,21 +178,25 @@ class SimplePolicyGradient:
             # Update obs
             obs = obs_next
 
+            terminal = done
             epoch_ended = t == self.batch_size - 1
 
-            if done or epoch_ended:
-                batch_rets.append(ep_ret)
-                batch_lens.append(ep_len)
+            if terminal or epoch_ended:
+                # Do not render in this epoch
+                finished_rendering_this_epoch = True
 
+                # Reset buffer ptr and do post processing
                 self.buffer.finish_path()
+
+                if terminal:
+                    # only save EpRet / EpLen if trajectory finished
+                    self.logger.store(EpRet=ep_ret, EpLen=ep_len)
 
                 # reset episode-specific variables
                 obs, done, ep_ret, ep_len = self.env.reset(), False, 0, 0  # first obs comes from starting distribution
 
         # take a single policy gradient update step
-        batch_loss = self.opt_update()
-
-        return batch_loss.cpu(), batch_rets, batch_lens
+        self.opt_update()
 
     def opt_update(self):
         # take a single policy gradient update step
@@ -189,14 +208,24 @@ class SimplePolicyGradient:
         loss_pi.backward()
         self.pi_optimizer.step()
 
-        return loss_pi
+        self.logger.store(LossPi=loss_pi.item())
 
     def train(self):
+        start_time = time.time()
+
         # training loop
-        for i in range(self.max_epochs):
-            batch_loss, batch_rets, batch_lens = self.train_one_epoch()
-            print('epoch: %3d \t loss: %.3f \t return: %.3f \t ep_len: %.3f' %
-                  (i, batch_loss, np.mean(batch_rets).item(), np.mean(batch_lens).item()))
+        for epoch in range(self.max_epochs):
+            self.train_one_epoch()
+            # Save model
+            if (epoch % self.save_freq == 0) or (epoch == self.max_epochs - 1):
+                self.logger.save_state({'env': self.env}, None)
+            # Log info about epoch
+            self.logger.log_tabular('Epoch', epoch)
+            self.logger.log_tabular('LossPi', average_only=True)
+            self.logger.log_tabular('EpRet', with_min_and_max=True)
+            self.logger.log_tabular('EpLen', average_only=True)
+            self.logger.log_tabular('Time', time.time() - start_time)
+            self.logger.dump_tabular()
 
 
 @hydra.main(version_base=None, config_path=".", config_name="config")

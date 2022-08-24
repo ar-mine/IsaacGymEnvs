@@ -44,6 +44,16 @@ def discount_cumsum(x, discount):
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
 
+def increment_cumsum(x, gamma):
+    buffer = np.zeros((len(x),))
+    for i, x_ in enumerate(x):
+        if i == 0:
+            buffer[0] = x_
+        else:
+            buffer[i] = gamma*buffer[i-1]+x_
+    return buffer
+
+
 class Actor(nn.Module):
 
     def _distribution(self, obs):
