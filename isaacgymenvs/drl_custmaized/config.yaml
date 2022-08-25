@@ -1,5 +1,8 @@
-env_name: MountainCar-v0
+#env_name: MountainCar-v0
+env_name: CartPole-v1
 hidden_sizes: [32]
+gamma: 0.9
+epsilon: 0.1
 lr: 1e-2
 max_epochs: 50
 batch_size: 5000

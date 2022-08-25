@@ -57,7 +57,8 @@ class SPGBuffer:
         """
         path_slice = slice(self.path_start_idx, self.ptr)
         rews = np.append(self.rew_buf[path_slice], last_val)
-
+        rews -= np.mean(rews)
+        rews /= np.std(rews)
         # the next line computes rewards-to-go, to be targets for the value function
         self.ret_buf[path_slice] = discount_cumsum(rews, self.gamma)[:-1]
 
@@ -144,7 +145,7 @@ class SimplePolicyGradient:
     def reward_modify(obs):
         pos_rew = obs[0]+0.5
         pos_rew = (pos_rew + 1)**2 if pos_rew >= 0 else pos_rew
-        vel_rew = abs(obs[1])/0.07
+        vel_rew = 0.2*abs(obs[1])/0.07
         # reward += alpha*(0.6 - obs[0])/1.8 + (1-alpha)*abs(obs[1])/0.07
         # reward += alpha*abs(obs[1])/0.07
         return pos_rew+vel_rew-0.2
