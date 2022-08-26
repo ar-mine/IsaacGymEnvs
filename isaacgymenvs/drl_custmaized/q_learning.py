@@ -28,8 +28,7 @@ class QLearningTable:
         # Only used in tasks whose action space is discrete
         self.q_table = pd.DataFrame(columns=self.action_list, dtype=np.float64)
 
-        self.statistic_list = [[]]*obs_dim
-        self.statistic_count = [0]*obs_dim
+        self.statistic_list = [[] for _ in range(obs_dim)]
 
     def check_state_exist(self, obs: str):
         if obs not in self.q_table.index:
@@ -59,7 +58,7 @@ class QLearningTable:
 
         return action
 
-    def update(self, obs, act, reward, obs_next, done):
+    def update(self, obs, act, reward, done, obs_next):
         obs = self.discrete_serialize(obs)
         obs_next = self.discrete_serialize(obs_next)
 
@@ -77,7 +76,6 @@ class QLearningTable:
         for idx, o in enumerate(obs):
             if o not in self.statistic_list[idx]:
                 self.statistic_list[idx].append(o)
-                self.statistic_count[idx] += 1
         return str(obs)
 
     def update_epsilon(self):
@@ -85,7 +83,7 @@ class QLearningTable:
 
 
 class QLearning:
-    def __init__(self, cfg, logger_kwargs=None):
+    def __init__(self, cfg, logger_kwargs=None, table_cls=QLearningTable):
         self.cfg = cfg
         self.logger = EpochLogger(logger_kwargs)
 
@@ -100,8 +98,8 @@ class QLearning:
         if isinstance(self.env.action_space, Discrete):
             self.act_dim = self.env.action_space.n
 
-        self.q_table = QLearningTable(self.cfg, self.obs_dim, self.act_dim,
-                                      obs_discrete_factor=[0.4, 0.4, 0.04, 0.4])
+        self.q_table = table_cls(self.cfg, self.obs_dim, self.act_dim,
+                                 obs_discrete_factor=[0.4, 0.4, 0.04, 0.4])
 
     def create_env(self):
         # make environment, check spaces, get obs / act dims
@@ -135,7 +133,7 @@ class QLearning:
 
             # Modify the reward based on specific task
             reward = self.reward_modify(obs_next, done)
-            self.q_table.update(obs, act, reward, obs_next, done)
+            self.q_table.update(obs, act, reward, done, obs_next)
 
             ep_ret += reward
             ep_len += 1
@@ -172,7 +170,7 @@ class QLearning:
             self.logger.log_tabular('Time', time.time() - start_time)
             self.logger.dump_tabular()
             print(self.q_table.q_table.index.shape[0])
-            print(self.q_table.statistic_count)
+            print([len(i) for i in self.q_table.statistic_list])
 
 
 @hydra.main(version_base=None, config_path=".", config_name="config")
