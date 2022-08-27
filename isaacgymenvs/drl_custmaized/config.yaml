@@ -1,11 +1,12 @@
 #env_name: MountainCar-v0
 env_name: CartPole-v1
-hidden_sizes: [32]
+hidden_sizes: [32, 32]
 gamma: 0.9
-epsilon: 0.1
-lr: 1e-2
+epsilon: 0.5
+lr: 1e-3
 max_epochs: 50
-batch_size: 5000
+epoch_length: 5000
+batch_size: 32
 render: true
 device: cpu
 save_freq: 10
