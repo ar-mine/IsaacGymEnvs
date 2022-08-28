@@ -113,7 +113,11 @@ class MLPGaussianActor(Actor):
         return pi.log_prob(act).sum(axis=-1)  # Last axis sum needed for Torch Normal distribution
 
     def get_action(self, obs):
-        raise NotImplementedError
+        with torch.no_grad():
+            pi = self._distribution(obs)
+            a = pi.sample()
+            log_prob = self._log_prob_from_distribution(pi, a)
+        return a, log_prob
 
 
 class MLPCritic(nn.Module):

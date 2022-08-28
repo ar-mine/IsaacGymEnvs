@@ -1,55 +1,27 @@
 import time
 
-import numpy as np
-
 import hydra
 
 import torch
-from torch import nn
 from torch.optim import Adam
 
 import gym
 from gym.spaces import Discrete, Box
 
-from models import MLPActorCritic, combined_shape
+from base import BaseBuffer
+from models import MLPActorCritic
 from logger import EpochLogger
 
 
-class A2CBuffer:
+class A2CBuffer(BaseBuffer):
     def __init__(self, obs_dim, act_dim, max_size):
-        self.obs_buf = np.zeros(combined_shape(max_size, obs_dim), dtype=np.float32)
-        self.act_buf = np.zeros(combined_shape(max_size, act_dim), dtype=np.float32)
-        self.rew_buf = np.zeros(combined_shape(max_size, 1), dtype=np.float32)
-        self.obs_next_buf = np.zeros(combined_shape(max_size, obs_dim), dtype=np.float32)
-        self.ptr, self.max_size, self.full_flag = 0, max_size, False
-
-    def store(self, obs, act, reward, obs_next):
-        if self.ptr == self.max_size:
-            self.ptr = 0
-            self.full_flag = True
-
-        # Overwrite the old data when the buffer is full
-        self.obs_buf[self.ptr] = obs
-        self.act_buf[self.ptr] = act
-        self.rew_buf[self.ptr] = reward
-        self.obs_next_buf[self.ptr] = obs_next
-        self.ptr += 1
-
-    def sample(self, batch_size, device):
-        # Sample batch from current size or all memory
-        if self.full_flag:
-            sample_index = np.random.choice(self.max_size, size=batch_size)
-        else:
-            sample_index = np.random.choice(self.ptr, size=batch_size)
-
-        data = dict(obs=self.obs_buf[sample_index, :], act=self.act_buf[sample_index, :],
-                    reward=self.rew_buf[sample_index, :], obs_next=self.obs_next_buf[sample_index, :])
-
-        return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k, v in data.items()}
+        super(A2CBuffer, self).__init__(obs_dim, act_dim, max_size)
 
 
 class A2C:
-    def __init__(self, cfg, obs_space, act_space):
+    def __init__(self, cfg, logger, obs_space, act_space):
+        self.logger = logger
+
         self.buffer_size = cfg['buffer_size']
         # Discount of critic for future value
         self.gamma = cfg['gamma']
@@ -82,16 +54,12 @@ class A2C:
         # Gradient descent for critic
         self.critic_optimizer.zero_grad()
         loss_critic = self._compute_loss_critic(obs, reward, obs_next)
-        loss_critic_mse = loss_critic.norm().pow(2)/loss_critic.shape[0]
+        loss_critic_mse = loss_critic.norm().pow(2) / loss_critic.shape[0]
         loss_critic_mse.backward()
         self.critic_optimizer.step()
 
         # Record loss-critic
-        # logger.store(LossQ=loss_q.item(), **q_info)
-
-        # Freeze parameters of critic network
-        # for p in self.ac_network.v.parameters():
-        #     p.requires_grad = False
+        self.logger.store(LossC=loss_critic_mse.item())
 
         # Gradient descent for actor
         self.actor_optimizer.zero_grad()
@@ -99,12 +67,8 @@ class A2C:
         loss_actor.backward()
         self.actor_optimizer.step()
 
-        # Unfreeze parameters of critic network
-        # for p in self.ac_network.v.parameters():
-        #     p.requires_grad = True
-
         # Record loss-actor
-        # logger.store(LossPi=loss_pi.item(), **pi_info)
+        self.logger.store(LossA=loss_actor.item())
 
     def _compute_loss_critic(self, obs, reward, obs_next):
         v = self.ac_network.v(obs)
@@ -140,11 +104,11 @@ class A2CTrainer:
         # Env loader
         self.env = gym.make(self.env_name)
 
-        self.estimator = A2C(self.cfg, self.env.observation_space, self.env.action_space)
+        self.estimator = A2C(self.cfg, self.logger, self.env.observation_space, self.env.action_space)
 
     @staticmethod
-    def reward_modify(done):
-        return 1 if done else 2
+    def reward_modify(reward):
+        return 10 if reward == 0 else reward
 
     def train(self):
         # Timer starts
@@ -170,10 +134,10 @@ class A2CTrainer:
             obs_next, reward, done, info = self.env.step(act)
 
             # Modify the reward based on specific task
-            reward = self.reward_modify(done)
+            reward_fine = self.reward_modify(reward)
 
             # Record experience
-            self.estimator.buffer.store(obs, act, reward, obs_next)
+            self.estimator.buffer.store(obs, act, reward_fine, obs_next)
 
             # Train after some steps with train_freq
             if (t + 1) % self.train_freq == 0 and (t + 1) > self.step_start_train:
@@ -190,7 +154,7 @@ class A2CTrainer:
 
             # Set corresponding end flag
             episode_end = done
-            epoch_end = (t+1) % self.epoch_length == 0
+            epoch_end = (t + 1) % self.epoch_length == 0
 
             if episode_end or epoch_end:
                 if episode_end:
@@ -209,6 +173,8 @@ class A2CTrainer:
 
                     # Log info about epoch
                     self.logger.log_tabular('Epoch', epoch)
+                    self.logger.log_tabular('LossA', average_only=True)
+                    self.logger.log_tabular('LossC', average_only=True)
                     self.logger.log_tabular('EpRet', with_min_and_max=True)
                     self.logger.log_tabular('EpLen', average_only=True)
                     self.logger.log_tabular('Time', time.time() - start_time)
