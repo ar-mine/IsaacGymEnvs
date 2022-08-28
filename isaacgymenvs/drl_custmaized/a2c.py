@@ -131,7 +131,7 @@ class A2CTrainer:
                 act, log_prob = self.estimator.get_action(obs)
             else:
                 act = self.env.action_space.sample()
-            obs_next, reward, done, info = self.env.step(act)
+            obs_next, reward, done, *info = self.env.step(act)
 
             # Modify the reward based on specific task
             reward_fine = self.reward_modify(reward)
@@ -153,7 +153,10 @@ class A2CTrainer:
             ep_len += 1
 
             # Set corresponding end flag
-            episode_end = done
+            if (t + 1) < self.step_start_train:
+                episode_end = False
+            else:
+                episode_end = done
             epoch_end = (t + 1) % self.epoch_length == 0
 
             if episode_end or epoch_end:
