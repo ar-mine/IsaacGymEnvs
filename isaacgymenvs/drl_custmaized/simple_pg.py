@@ -134,7 +134,7 @@ class SimplePolicyGradient:
                                   data['logp'].to(self.device), data['ret'].to(self.device)
 
         # Policy loss
-        pi, logp = self.actor(obs, act.squeeze())
+        logp = self.actor(obs, act.squeeze())
 
         # make loss function whose gradient, for the right data, is policy gradient
         loss_pi = -(logp * ret).mean()
@@ -163,7 +163,7 @@ class SimplePolicyGradient:
                 self.env.render()
 
             # act in the environment
-            act, logp = self.actor.step(torch.as_tensor(obs, dtype=torch.float32, device=self.device))
+            act, logp = self.actor.get_action(torch.as_tensor(obs, dtype=torch.float32, device=self.device))
             act, logp = act.cpu().numpy(), logp.cpu().numpy()
             obs_next, reward, done, _ = self.env.step(act)
 
