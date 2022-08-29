@@ -82,7 +82,7 @@ class FrankaReach(FrankaBase):
         self.debug_viz()
 
 
-@torch.jit.script
+# @torch.jit.script
 def compute_reward(eef_target_t: Tensor, eef_state_t: Tensor, max_dist: float,
                    threshold: float, max_episode_length: float,
                    progress_buf: Tensor, reset_buf: Tensor) -> Tuple[Tensor, Tensor]:
@@ -93,7 +93,7 @@ def compute_reward(eef_target_t: Tensor, eef_state_t: Tensor, max_dist: float,
     timeout_mask = progress_buf >= max_episode_length - 1
     abort_mask = dist_reward <= 0
 
-    reward = dist_reward + win_mask * (max_episode_length - progress_buf)
+    reward = dist_reward - 1 + win_mask * max_episode_length/2
 
     # Compute resets
     reset_buf = torch.where(

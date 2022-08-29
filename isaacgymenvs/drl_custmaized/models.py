@@ -84,7 +84,7 @@ class MLPCategoricalActor(Actor):
         return Categorical(logits=logits)
 
     def _log_prob_from_distribution(self, pi, act):
-        return pi.log_prob(act)
+        return pi.log_prob(act.squeeze())
 
     def get_action(self, obs):
         # Choose action by sampling from distribution

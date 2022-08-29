@@ -18,7 +18,7 @@ class A2CBuffer(BaseBuffer):
         super(A2CBuffer, self).__init__(obs_dim, act_dim, max_size)
 
 
-class A2C:
+class A2CAgent:
     def __init__(self, cfg, logger, obs_space, act_space):
         self.logger = logger
 
@@ -63,7 +63,7 @@ class A2C:
 
         # Gradient descent for actor
         self.actor_optimizer.zero_grad()
-        loss_actor = self._compute_loss_actor(obs, act, loss_critic.detach())
+        loss_actor = self._compute_loss_actor(obs, act, loss_critic_mse.detach())
         loss_actor.backward()
         self.actor_optimizer.step()
 
@@ -76,7 +76,7 @@ class A2C:
         return reward + self.gamma * v_next - v
 
     def _compute_loss_actor(self, obs, act, loss_critic):
-        log_prob = self.ac_network.pi(obs, act)
+        log_prob = self.ac_network.pi(obs, act).view((-1, 1))
         loss = -(log_prob * loss_critic).mean()
         return loss
 
@@ -104,11 +104,16 @@ class A2CTrainer:
         # Env loader
         self.env = gym.make(self.env_name)
 
-        self.estimator = A2C(self.cfg, self.logger, self.env.observation_space, self.env.action_space)
+        self.estimator = A2CAgent(self.cfg, self.logger, self.env.observation_space, self.env.action_space)
 
     @staticmethod
-    def reward_modify(reward):
-        return 10 if reward == 0 else reward
+    def reward_modify(obs, obs_next):
+        pos, vel = obs
+        pos_next, vel_next = obs_next
+        h = abs(pos+0.5)
+        h_next = abs(pos_next+0.5)
+        reward = (h_next - h) + (vel_next**2 - vel**2)
+        return -1+reward*10
 
     def train(self):
         # Timer starts
@@ -134,7 +139,7 @@ class A2CTrainer:
             obs_next, reward, done, *info = self.env.step(act)
 
             # Modify the reward based on specific task
-            reward_fine = self.reward_modify(reward)
+            reward_fine = self.reward_modify(obs, obs_next)
 
             # Record experience
             self.estimator.buffer.store(obs, act, reward_fine, obs_next)
@@ -153,10 +158,7 @@ class A2CTrainer:
             ep_len += 1
 
             # Set corresponding end flag
-            if (t + 1) < self.step_start_train:
-                episode_end = False
-            else:
-                episode_end = done
+            episode_end = done
             epoch_end = (t + 1) % self.epoch_length == 0
 
             if episode_end or epoch_end:

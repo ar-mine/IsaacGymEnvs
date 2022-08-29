@@ -1,7 +1,7 @@
 env_name: MountainCar-v0
 #env_name: CartPole-v1
 #env_name: MountainCarContinuous-v0
-render: false
+render: true
 
 buffer_size: 5000
 batch_size: 32
@@ -11,10 +11,10 @@ max_epochs: 50
 step_start_train: 2000
 train_freq: 50
 
-hidden_sizes: [32]
+hidden_sizes: [32, 32]
 lr_actor: 1e-3
-lr_critic: 1e-2
-device: cuda
+lr_critic: 1e-3
+device: cpu
 
 gamma: 0.9
 epsilon: 0.5

@@ -43,6 +43,7 @@ from isaacgymenvs.utils.reformat import omegaconf_to_dict, print_dict
 
 from isaacgymenvs.utils.utils import set_np_formatting, set_seed
 
+
 ## OmegaConf & Hydra Config
 
 # Resolvers used in hydra configs (see https://omegaconf.readthedocs.io/en/2.1_branch/usage.html#resolvers)
@@ -97,9 +98,9 @@ def launch_rlg_hydra(cfg: DictConfig):
 
     def create_env_thunk(**kwargs):
         envs = isaacgymenvs.make(
-            cfg.seed, 
-            cfg.task_name, 
-            cfg.task.env.numEnvs, 
+            cfg.seed,
+            cfg.task_name,
+            cfg.task.env.numEnvs,
             cfg.sim_device,
             cfg.rl_device,
             cfg.graphics_device_id,
@@ -131,10 +132,11 @@ def launch_rlg_hydra(cfg: DictConfig):
     # register new AMP network builder and agent
     def build_runner(algo_observer):
         runner = Runner(algo_observer)
-        runner.algo_factory.register_builder('amp_continuous', lambda **kwargs : amp_continuous.AMPAgent(**kwargs))
-        runner.player_factory.register_builder('amp_continuous', lambda **kwargs : amp_players.AMPPlayerContinuous(**kwargs))
-        model_builder.register_model('continuous_amp', lambda network, **kwargs : amp_models.ModelAMPContinuous(network))
-        model_builder.register_network('amp', lambda **kwargs : amp_network_builder.AMPBuilder())
+        runner.algo_factory.register_builder('amp_continuous', lambda **kwargs: amp_continuous.AMPAgent(**kwargs))
+        runner.player_factory.register_builder('amp_continuous',
+                                               lambda **kwargs: amp_players.AMPPlayerContinuous(**kwargs))
+        model_builder.register_model('continuous_amp', lambda network, **kwargs: amp_models.ModelAMPContinuous(network))
+        model_builder.register_network('amp', lambda **kwargs: amp_network_builder.AMPBuilder())
 
         return runner
 
@@ -177,12 +179,13 @@ def launch_rlg_hydra(cfg: DictConfig):
     runner.run({
         'train': not cfg.test,
         'play': cfg.test,
-        'checkpoint' : cfg.checkpoint,
-        'sigma' : None
+        'checkpoint': cfg.checkpoint,
+        'sigma': None
     })
 
     if cfg.wandb_activate and rank == 0:
         wandb.finish()
+
 
 if __name__ == "__main__":
     launch_rlg_hydra()
