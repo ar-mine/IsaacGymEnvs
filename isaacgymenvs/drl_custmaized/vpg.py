@@ -1,5 +1,5 @@
 import hydra
-from simple_pg import SimplePolicyGradient
+from policy_gradient import SimplePolicyGradient
 
 
 class VPG(SimplePolicyGradient):
