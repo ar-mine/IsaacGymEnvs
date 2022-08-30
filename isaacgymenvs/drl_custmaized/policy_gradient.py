@@ -1,4 +1,5 @@
 import time
+from multiprocessing import Process, Array
 
 import numpy as np
 import hydra
@@ -87,6 +88,9 @@ class PGTrainer(BaseTrainer):
 
         self.agent = PGAgent(self.cfg, self.logger, self.env.observation_space, self.env.action_space, self.test)
 
+        # Current steps, render flag
+        self.process_exchange = Array('i', [0, 0])
+
     @staticmethod
     def reward_modify(obs, obs_next):
         pos, vel = obs
@@ -161,7 +165,7 @@ class PGTrainer(BaseTrainer):
                     self.logger.dump_tabular()
 
                     # Save model
-                    if (epoch % self.save_per == 0) or (epoch == self.max_epochs - 1):
+                    if (epoch % self.save_per == 0) or (epoch == self.max_epochs):
                         self.logger.save_state({'env': self.env}, epoch)
 
     def evaluate(self):
