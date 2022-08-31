@@ -36,7 +36,7 @@ class BaseBuffer:
             sample_index = np.random.choice(self.ptr, size=batch_size)
 
         data = dict(obs=self.obs_buf[sample_index, :], act=self.act_buf[sample_index, :],
-                    reward=self.reward_buf[sample_index, :], obs_next=self.obs_next_buf[sample_index, :])
+                    reward=self.reward_buf[sample_index], obs_next=self.obs_next_buf[sample_index, :])
 
         return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k, v in data.items()}
 
@@ -57,9 +57,11 @@ class BaseAgent:
         if isinstance(act_space, Box):
             self.act_dim = act_space.shape[0]
             self.buffer = buffer_type(self.obs_dim, self.act_dim, self.buffer_size)
+            self.continuous = True
         elif isinstance(act_space, Discrete):
             self.act_dim = act_space.n
             self.buffer = buffer_type(self.obs_dim, 1, self.buffer_size)
+            self.continuous = False
         else:
             raise NameError("Action space is not supported!")
 

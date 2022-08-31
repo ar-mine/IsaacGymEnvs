@@ -139,8 +139,8 @@ class A2CTrainer:
             obs_next, reward, done, *info = self.env.step(act)
 
             # Modify the reward based on specific task
-            reward_fine = self.reward_modify(obs, obs_next)
-
+            # reward_fine = self.reward_modify(obs, obs_next)
+            reward_fine = reward
             # Record experience
             self.estimator.buffer.store(obs, act, reward_fine, obs_next)
 

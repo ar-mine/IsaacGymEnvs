@@ -65,12 +65,15 @@ class Actor(nn.Module):
     def get_action(self, obs):
         raise NotImplementedError
 
-    def forward(self, obs, act):
+    def forward(self, obs, act=None):
         # Compute the log prob according to the batch of obs and act
         # With gradient to compute loss
         pi = self._distribution(obs)
-        log_prob = self._log_prob_from_distribution(pi, act)
-        return log_prob
+        if act is not None:
+            log_prob = self._log_prob_from_distribution(pi, act)
+            return log_prob
+        else:
+            return pi
 
 
 class MLPCategoricalActor(Actor):
