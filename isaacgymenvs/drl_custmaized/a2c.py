@@ -9,13 +9,13 @@ import gym
 from gym.spaces import Discrete, Box
 
 from base import BaseBuffer
-from models import MLPActorCritic
-from logger import EpochLogger
+from isaacgymenvs.drl_custmaized.base.models import MLPActorCritic
+from isaacgymenvs.drl_custmaized.base.logger import EpochLogger
 
 
 class A2CBuffer(BaseBuffer):
-    def __init__(self, obs_dim, act_dim, max_size):
-        super(A2CBuffer, self).__init__(obs_dim, act_dim, max_size)
+    def __init__(self, obs_dim, act_dim, buffer_size):
+        super(A2CBuffer, self).__init__(obs_dim, act_dim, buffer_size)
 
 
 class A2CAgent:

@@ -9,8 +9,8 @@ from torch.optim import SGD
 import gym
 from gym.spaces import Discrete, Box
 
-from models import mlp, combined_shape
-from logger import EpochLogger
+from isaacgymenvs.drl_custmaized.base.models import mlp, combined_shape
+from isaacgymenvs.drl_custmaized.base.logger import EpochLogger
 
 
 class DQNBuffer:

@@ -7,7 +7,7 @@ import hydra
 import gym
 from gym.spaces import Discrete, Box
 
-from logger import EpochLogger
+from isaacgymenvs.drl_custmaized.base.logger import EpochLogger
 
 
 class QLearningTable:

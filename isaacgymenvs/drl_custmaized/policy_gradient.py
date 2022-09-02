@@ -1,5 +1,5 @@
 import time
-from multiprocessing import Process, Array
+from multiprocessing import Array
 
 import numpy as np
 import hydra
@@ -9,15 +9,15 @@ from torch import nn
 from torch.optim import Adam
 
 from base import BaseBuffer, BaseAgent, BaseTrainer
-from models import MLPCategoricalActor, MLPGaussianActor, discount_cumsum
+from isaacgymenvs.drl_custmaized.base.models import MLPCategoricalActor, MLPGaussianActor, discount_cumsum
 
 PATH = 'F:\\Github\\IsaacGymEnvs\\isaacgymenvs\\drl_custmaized\\experiments\\1661911727\\pyt_save\\model80.pt'
 
 
 class PGBuffer(BaseBuffer):
-    def __init__(self, obs_dim, act_dim, max_size, gamma=0.95):
-        super(PGBuffer, self).__init__(obs_dim, act_dim, max_size)
-        self.ret_buf = np.zeros(max_size, dtype=np.float32)
+    def __init__(self, obs_dim, act_dim, buffer_size, gamma=0.95):
+        super(PGBuffer, self).__init__(obs_dim, act_dim, buffer_size)
+        self.ret_buf = np.zeros(buffer_size, dtype=np.float32)
         self.gamma = gamma
         self.path_start_idx = 0
 

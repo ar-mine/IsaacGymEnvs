@@ -76,6 +76,19 @@ class Actor(nn.Module):
             return pi
 
 
+class MLPDeterministicActor(nn.Module):
+
+    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, act_limit, device):
+        super().__init__()
+        self.pi = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation, nn.Tanh).to(device)
+        self.limit_bias = (act_limit[0] + act_limit[1])/2
+        self.limit_scale = (act_limit[0] - act_limit[1])/2
+
+    def forward(self, obs):
+        # Return output from network scaled to action space limits.
+        return self.limit_scale * (self.pi(obs) + self.limit_bias)
+
+
 class MLPCategoricalActor(Actor):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation, device):
@@ -130,6 +143,16 @@ class MLPCritic(nn.Module):
 
     def forward(self, obs):
         return self.v_net(obs)
+
+
+class MLPQFunction(nn.Module):
+    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, device):
+        super().__init__()
+        self.q = mlp([obs_dim + act_dim] + list(hidden_sizes) + [1], activation).to(device)
+
+    def forward(self, obs, act):
+        q = self.q(torch.cat([obs, act], dim=-1))
+        return q
 
 
 class MLPActorCritic(nn.Module):

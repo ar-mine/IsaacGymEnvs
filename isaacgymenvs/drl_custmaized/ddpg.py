@@ -1,116 +1,113 @@
 import time
-from multiprocessing import Array
+from copy import deepcopy
 
-import numpy as np
 import hydra
 
 import torch
 from torch import nn
 from torch.optim import Adam
 
-from base import BaseBuffer, BaseAgent, BaseTrainer
-from isaacgymenvs.drl_custmaized.base.models import MLPCategoricalActor, MLPGaussianActor, MLPCritic
-
-PATH = 'F:\\Github\\IsaacGymEnvs\\isaacgymenvs\\drl_custmaized\\experiments\\1661911727\\pyt_save\\model80.pt'
-
-
-class ACBuffer(BaseBuffer):
-    def __init__(self, obs_dim, act_dim, buffer_size, gamma=0.95):
-        super(ACBuffer, self).__init__(obs_dim, act_dim, buffer_size)
-        self.ret_buf = np.zeros(buffer_size, dtype=np.float32)
-        self.gamma = gamma
-        self.path_start_idx = 0
-
-    def get(self, device):
-        self.ptr, self.path_start_idx = 0, 0
-        data = dict(obs=self.obs_buf, act=self.act_buf, reward=self.reward_buf, obs_next=self.obs_next_buf)
-        return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k, v in data.items()}
+from base.base import BaseAgent, BaseTrainer
+from base.buffer import ReplayBuffer
+from base.models import MLPDeterministicActor, MLPQFunction
 
 
-class ACAgent(BaseAgent):
-    def __init__(self, cfg, logger, obs_space, act_space, test):
-        super().__init__(cfg, logger, obs_space, act_space, buffer_type=ACBuffer)
+class DDPGAgent(BaseAgent):
+    def __init__(self, cfg, logger, obs_space, act_space, evaluate, act_limit):
+        # Whether in evaluate mode
+        self.evaluate = evaluate
 
-        self.test = test
-        self.buffer.gamma = self.gamma
+        super().__init__(cfg, logger, obs_space, act_space)
+        assert self.continuous, "DDPG only works on continuous action space."
 
-        # Network(depends on action space) and optimizer
-        if self.continuous:
-            self.actor_network = MLPGaussianActor(self.obs_dim, self.act_dim, self.hidden_sizes,
-                                                  activation=nn.Tanh, device=self.device)
-        else:
-            self.actor_network = MLPCategoricalActor(self.obs_dim, self.act_dim, self.hidden_sizes,
-                                                     activation=nn.Tanh, device=self.device)
-        self.critic_network = MLPCritic(self.obs_dim, self.hidden_sizes,
-                                        activation=nn.Tanh, device=self.device)
+        self.sync_factor = cfg['soft_update_factor']
 
-        if not test:
-            self.actor_optimizer = Adam(self.actor_network.parameters(), lr=cfg['lr_actor'])
-            self.critic_optimizer = Adam(self.critic_network.parameters(), lr=cfg['lr_critic'])
-            self.logger.setup_pytorch_saver(self.actor_network)
-        else:
-            self.actor_network.load_state_dict(torch.load(PATH))
+        # Buffer init
+        self.buffer = ReplayBuffer(self.obs_dim, self.act_dim, self.buffer_size, self.continuous)
 
-    def update(self):
-        data = self.buffer.get(self.device)
+        # Network(depends on action space) and optimizer init
+        self.actor = MLPDeterministicActor(self.obs_dim, self.act_dim, self.hidden_sizes,
+                                           activation=nn.Tanh, act_limit=act_limit, device=self.device)
+        self.actor_t = deepcopy(self.actor)
+        self.actor_optimizer = Adam(self.actor.parameters(), lr=cfg['lr_actor'])
+        for p in self.actor_t.parameters():
+            p.requires_grad = False
+
+        self.critic = MLPQFunction(self.obs_dim, self.act_dim, self.hidden_sizes,
+                                   activation=nn.Tanh, device=self.device)
+        self.critic_t = deepcopy(self.critic)
+        self.critic_optimizer = Adam(self.critic.parameters(), lr=cfg['lr_critic'])
+        for p in self.critic_t.parameters():
+            p.requires_grad = False
+
+    def update(self, batch_size):
+        data = self.buffer.sample(batch_size, self.device)
         # Get corresponding data from sampling batch
-        obs, act, reward, obs_next = data["obs"], data["act"], data["reward"], data["obs_next"]
+        obs, act, reward, obs_next, done = data["obs"], data["act"], data["reward"], data["obs_next"], data['done']
 
-        # Gradient descent for critic
+        with torch.no_grad():
+            q_target = self.critic_t(obs_next, self.actor_t(obs_next))
+            targets = reward + self.gamma*(1-done)*q_target
+        # Update Q-function
         self.critic_optimizer.zero_grad()
-        loss_critic, td_error = self._compute_loss_critic(obs, reward, obs_next)
+        loss_critic = self._compute_loss_critic(obs, act, targets)
         loss_critic.backward()
         self.critic_optimizer.step()
 
         # Record loss-critic
         self.logger.store(LossC=loss_critic.item())
 
-        # Gradient descent for actor
+        # Gradient ascent for actor
         self.actor_optimizer.zero_grad()
-        loss_actor = self._compute_loss_actor(obs, act, td_error.detach())
+        loss_actor = self._compute_loss_actor(obs)
         loss_actor.backward()
         self.actor_optimizer.step()
 
         # Record loss-actor
         self.logger.store(LossA=loss_actor.item())
 
-    def _compute_loss_actor(self, obs, act, ret):
-        log_prob = self.actor_network(obs, act)
-        loss = -(log_prob * ret).mean()
-        return loss
+        # Soft update
+        self.soft_update()
 
-    def _compute_loss_critic(self, obs, reward, obs_next):
-        q_value = self.critic_network(obs)
-        q_value_next = self.critic_network(obs_next)
-        td_error = reward + self.gamma * q_value_next - q_value
-        loss = -td_error.mean()
-        return loss, td_error
+    def _compute_loss_actor(self, obs):
+        q_value = self.critic(obs, self.actor(obs))
+        return -q_value.mean()
+
+    def _compute_loss_critic(self, obs, act, targets):
+        q = self.critic(obs, act)
+        MSBELoss = (q - targets)**2
+        return MSBELoss.mean()
 
     def get_action(self, obs):
         obs = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
-        if not self.test:
-            act, log_prob = self.actor_network.get_action(obs)
-            return act.cpu().numpy(), log_prob.cpu().numpy()
-        else:
-            if self.continuous:
-                act, log_prob = self.actor_network.get_action(obs)
-            else:
-                act = torch.argmax(self.actor_network(obs).logits)
-            return act.cpu().numpy()
+        with torch.no_grad():
+            act = self.actor(obs)
+        return act.cpu().numpy()
+
+    def soft_update(self):
+        with torch.no_grad():
+            for p, p_targ in zip(self.actor.parameters(), self.actor_t.parameters()):
+                p_targ.data.mul_(self.sync_factor)
+                p_targ.data.add_((1 - self.sync_factor) * p.data)
+
+            for p, p_targ in zip(self.critic.parameters(), self.critic_t.parameters()):
+                p_targ.data.mul_(self.sync_factor)
+                p_targ.data.add_((1 - self.sync_factor) * p.data)
 
 
-class ACTrainer(BaseTrainer):
+class DDPGTrainer(BaseTrainer):
     def __init__(self, cfg, logger_kwargs=None, test=False):
         super().__init__(cfg, logger_kwargs, test)
+        self.batch_size = self.cfg['batch_size']
         self.epoch_length = self.cfg['epoch_length']
         self.max_epochs = self.cfg['max_epochs']
         self.step_start_train = self.cfg['step_start_train']
         self.train_freq = self.cfg['train_freq']
 
-        self.agent = ACAgent(self.cfg, self.logger, self.env.observation_space, self.env.action_space, self.test)
+        self.act_limit = torch.Tensor([[2.0], [-2.0]])
 
-        # Current steps, render flag
-        self.process_exchange = Array('i', [0, 0])
+        self.agent = DDPGAgent(self.cfg, self.logger, self.env.observation_space,
+                               self.env.action_space, self.test, act_limit=self.act_limit)
 
     @staticmethod
     def reward_modify(obs, obs_next):
@@ -145,16 +142,19 @@ class ACTrainer(BaseTrainer):
                 self.env.render()
 
             # Act in the environment
-            act, log_prob = self.agent.get_action(obs)
+            if t > self.epoch_length:
+                act = self.agent.get_action(obs)
+            else:
+                act = self.env.action_space.sample()
             obs_next, reward, done, *info = self.env.step(act)
 
             # Modify the reward based on specific task
             # reward_fine = self.reward_modify(obs, obs_next)
-            reward_fine = reward
-            # reward = reward_fine
+            reward_fine = (reward + 8)/8
+            reward = reward_fine
 
             # Record experience
-            self.agent.buffer.store(obs, act, reward_fine, obs_next)
+            self.agent.buffer.store(obs=obs, act=act, reward=reward_fine, obs_next=obs_next, done=done)
 
             # Update obs
             obs = obs_next
@@ -167,6 +167,11 @@ class ACTrainer(BaseTrainer):
             episode_end = done
             epoch_end = (t + 1) % self.epoch_length == 0
 
+            # Update handling
+            if t >= self.step_start_train and t % self.train_freq == 0:
+                for _ in range(self.train_freq):
+                    self.agent.update(self.batch_size)
+
             if episode_end or epoch_end:
                 if episode_end:
                     # Do not render in this epoch
@@ -178,8 +183,6 @@ class ACTrainer(BaseTrainer):
                 obs, done, ep_ret, ep_len = self.env.reset(), False, 0, 0
 
                 if epoch_end:
-                    self.agent.update()
-
                     epoch += 1
                     # Reset epoch-specific variables
                     finished_rendering_this_epoch = False
@@ -217,7 +220,7 @@ class ACTrainer(BaseTrainer):
 
 @hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg):
-    agent = ACTrainer(cfg, test=cfg['test'])
+    agent = DDPGTrainer(cfg, test=cfg['test'])
     if not cfg['test']:
         agent.train()
     else:
