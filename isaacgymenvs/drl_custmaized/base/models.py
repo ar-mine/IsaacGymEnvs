@@ -81,8 +81,8 @@ class MLPDeterministicActor(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation, act_limit, device):
         super().__init__()
         self.pi = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation, nn.Tanh).to(device)
-        self.limit_bias = (act_limit[0] + act_limit[1])/2
-        self.limit_scale = (act_limit[0] - act_limit[1])/2
+        self.limit_bias = ((act_limit[0] + act_limit[1])/2).to(device)
+        self.limit_scale = ((act_limit[0] - act_limit[1])/2).to(device)
 
     def forward(self, obs):
         # Return output from network scaled to action space limits.

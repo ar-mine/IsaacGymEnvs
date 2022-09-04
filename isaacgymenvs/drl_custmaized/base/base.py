@@ -1,4 +1,7 @@
+import random
+
 import torch
+import numpy as np
 
 import gym
 from gym.spaces import Discrete, Box
@@ -30,8 +33,12 @@ class BaseAgent:
 
 
 class BaseTrainer:
-    def __init__(self, cfg, logger_kwargs=None, test=False):
-        self.test = test
+    def __init__(self, cfg, seed=0, logger_kwargs=None, evaluate=False):
+        random.seed(seed)
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+        self.evaluate = evaluate
 
         self.cfg = cfg
         self.logger = EpochLogger(logger_kwargs)

@@ -11,12 +11,14 @@ from base.base import BaseAgent, BaseTrainer
 from base.buffer import ReplayBuffer
 from base.models import MLPDeterministicActor, MLPQFunction
 
+PATH = 'F:\\Github\\IsaacGymEnvs\\isaacgymenvs\\drl_custmaized\\experiments\\1662183040\\pyt_save\\model200.pt'
+
 
 class DDPGAgent(BaseAgent):
     def __init__(self, cfg, logger, obs_space, act_space, evaluate, act_limit):
         # Whether in evaluate mode
         self.evaluate = evaluate
-
+        self.act_limit = act_limit
         super().__init__(cfg, logger, obs_space, act_space)
         assert self.continuous, "DDPG only works on continuous action space."
 
@@ -26,19 +28,26 @@ class DDPGAgent(BaseAgent):
         self.buffer = ReplayBuffer(self.obs_dim, self.act_dim, self.buffer_size, self.continuous)
 
         # Network(depends on action space) and optimizer init
-        self.actor = MLPDeterministicActor(self.obs_dim, self.act_dim, self.hidden_sizes,
-                                           activation=nn.Tanh, act_limit=act_limit, device=self.device)
-        self.actor_t = deepcopy(self.actor)
-        self.actor_optimizer = Adam(self.actor.parameters(), lr=cfg['lr_actor'])
-        for p in self.actor_t.parameters():
-            p.requires_grad = False
+        if not self.evaluate:
+            self.actor = MLPDeterministicActor(self.obs_dim, self.act_dim, self.hidden_sizes,
+                                               activation=nn.Tanh, act_limit=act_limit, device=self.device)
+            self.actor_t = deepcopy(self.actor)
+            self.actor_optimizer = Adam(self.actor.parameters(), lr=cfg['lr_actor'])
+            for p in self.actor_t.parameters():
+                p.requires_grad = False
 
-        self.critic = MLPQFunction(self.obs_dim, self.act_dim, self.hidden_sizes,
-                                   activation=nn.Tanh, device=self.device)
-        self.critic_t = deepcopy(self.critic)
-        self.critic_optimizer = Adam(self.critic.parameters(), lr=cfg['lr_critic'])
-        for p in self.critic_t.parameters():
-            p.requires_grad = False
+            self.critic = MLPQFunction(self.obs_dim, self.act_dim, self.hidden_sizes,
+                                       activation=nn.Tanh, device=self.device)
+            self.critic_t = deepcopy(self.critic)
+            self.critic_optimizer = Adam(self.critic.parameters(), lr=cfg['lr_critic'])
+            for p in self.critic_t.parameters():
+                p.requires_grad = False
+
+            self.logger.setup_pytorch_saver(self.actor)
+        else:
+            self.actor = MLPDeterministicActor(self.obs_dim, self.act_dim, self.hidden_sizes,
+                                               activation=nn.Tanh, act_limit=act_limit, device=self.device)
+            self.actor.load_state_dict(torch.load(PATH))
 
     def update(self, batch_size):
         data = self.buffer.sample(batch_size, self.device)
@@ -47,7 +56,7 @@ class DDPGAgent(BaseAgent):
 
         with torch.no_grad():
             q_target = self.critic_t(obs_next, self.actor_t(obs_next))
-            targets = reward + self.gamma*(1-done)*q_target
+            targets = reward + self.gamma * (1 - done) * q_target
         # Update Q-function
         self.critic_optimizer.zero_grad()
         loss_critic = self._compute_loss_critic(obs, act, targets)
@@ -75,13 +84,17 @@ class DDPGAgent(BaseAgent):
 
     def _compute_loss_critic(self, obs, act, targets):
         q = self.critic(obs, act)
-        MSBELoss = (q - targets)**2
-        return MSBELoss.mean()
+        msbe_loss = (q - targets) ** 2
+        return msbe_loss.mean()
 
-    def get_action(self, obs):
+    def get_action(self, obs, noise_scale):
         obs = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
         with torch.no_grad():
             act = self.actor(obs)
+            if not self.evaluate:
+                act += noise_scale * torch.randn(self.act_dim)
+                act[act < self.act_limit[0]] = self.act_limit[0]
+                act[act > self.act_limit[1]] = self.act_limit[1]
         return act.cpu().numpy()
 
     def soft_update(self):
@@ -96,18 +109,18 @@ class DDPGAgent(BaseAgent):
 
 
 class DDPGTrainer(BaseTrainer):
-    def __init__(self, cfg, logger_kwargs=None, test=False):
-        super().__init__(cfg, logger_kwargs, test)
+    def __init__(self, cfg, seed=0, logger_kwargs=None, evaluate=False):
+        super().__init__(cfg, seed, logger_kwargs, evaluate)
         self.batch_size = self.cfg['batch_size']
         self.epoch_length = self.cfg['epoch_length']
         self.max_epochs = self.cfg['max_epochs']
         self.step_start_train = self.cfg['step_start_train']
         self.train_freq = self.cfg['train_freq']
 
-        self.act_limit = torch.Tensor([[2.0], [-2.0]])
+        self.act_limit = torch.Tensor([[-2.0], [2.0]])
 
         self.agent = DDPGAgent(self.cfg, self.logger, self.env.observation_space,
-                               self.env.action_space, self.test, act_limit=self.act_limit)
+                               self.env.action_space, self.evaluate, act_limit=self.act_limit)
 
     @staticmethod
     def reward_modify(obs, obs_next):
@@ -143,14 +156,14 @@ class DDPGTrainer(BaseTrainer):
 
             # Act in the environment
             if t > self.epoch_length:
-                act = self.agent.get_action(obs)
+                act = self.agent.get_action(obs, noise_scale=0.01)
             else:
                 act = self.env.action_space.sample()
             obs_next, reward, done, *info = self.env.step(act)
 
             # Modify the reward based on specific task
             # reward_fine = self.reward_modify(obs, obs_next)
-            reward_fine = (reward + 8)/8
+            reward_fine = (reward + 8) / 8
             reward = reward_fine
 
             # Record experience
@@ -200,7 +213,7 @@ class DDPGTrainer(BaseTrainer):
                     if (epoch % self.save_per == 0) or (epoch == self.max_epochs):
                         self.logger.save_state({'env': self.env}, epoch)
 
-    def evaluate(self):
+    def test(self):
         obs, done = self.env.reset(), False
         count = 0
         while True:
@@ -220,11 +233,11 @@ class DDPGTrainer(BaseTrainer):
 
 @hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg):
-    agent = DDPGTrainer(cfg, test=cfg['test'])
+    agent = DDPGTrainer(cfg, evaluate=cfg['test'])
     if not cfg['test']:
         agent.train()
     else:
-        agent.evaluate()
+        agent.test()
 
 
 if __name__ == "__main__":
