@@ -145,32 +145,40 @@ class MLPCritic(nn.Module):
         return self.v_net(obs)
 
 
-class MLPQFunction(nn.Module):
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, device):
+class MLPActor(nn.Module):
+
+    def __init__(self, obs_dim, act_dim, hidden_sizes, activation, act_limit):
         super().__init__()
-        self.q = mlp([obs_dim + act_dim] + list(hidden_sizes) + [1], activation).to(device)
+        pi_sizes = [obs_dim] + list(hidden_sizes) + [act_dim]
+        self.pi = mlp(pi_sizes, activation, nn.Tanh)
+        self.limit_bias = ((act_limit[0] + act_limit[1]) / 2)
+        self.limit_scale = ((act_limit[0] - act_limit[1]) / 2)
+
+    def forward(self, obs):
+        # Return output from network scaled to action space limits.
+        return self.limit_scale * (self.pi(obs) + self.limit_bias)
+
+
+class MLPQFunction(nn.Module):
+
+    def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
+        super().__init__()
+        self.q = mlp([obs_dim + act_dim] + list(hidden_sizes) + [1], activation)
 
     def forward(self, obs, act):
         q = self.q(torch.cat([obs, act], dim=-1))
-        return q
+        return torch.squeeze(q, -1) # Critical to ensure q has right shape.
 
 
 class MLPActorCritic(nn.Module):
 
-    def __init__(self, observation_space, action_space,
-                 hidden_sizes=(64, 64), activation=nn.Tanh, device=torch.device('cpu')):
+    def __init__(self, obs_dim, act_dim, hidden_sizes, act_limit, activation=nn.ReLU, device=torch.device("cpu")):
         super().__init__()
 
-        obs_dim = observation_space.shape[0]
+        # build policy and value functions
+        self.pi = MLPActor(obs_dim, act_dim, hidden_sizes, activation, act_limit).to(device)
+        self.q = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation).to(device)
 
-        # policy builder depends on action space
-        if isinstance(action_space, Box):
-            self.pi = MLPGaussianActor(obs_dim, action_space.shape[0], hidden_sizes, activation, device)
-        elif isinstance(action_space, Discrete):
-            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation, device)
-
-        # build value function
-        self.v = MLPCritic(obs_dim, hidden_sizes, activation, device)
-
-    def get_action(self, obs):
-        return self.pi.get_action(obs)
+    def act(self, obs):
+        with torch.no_grad():
+            return self.pi(obs).numpy()

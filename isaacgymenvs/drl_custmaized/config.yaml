@@ -7,14 +7,14 @@ buffer_size: 500000
 batch_size: 64
 
 epoch_length: 5000
-max_epochs: 300
+max_epochs: 200
 step_start_train: 2000
 train_freq: 50
 
-soft_update_factor: 0.999
-hidden_sizes: [64]
-lr_actor: 1e-4
-lr_critic: 2e-4
+soft_update_factor: 0.995
+hidden_sizes: [32, 32]
+lr_actor: 5e-4
+lr_critic: 1e-3
 device: cpu
 
 gamma: 0.99

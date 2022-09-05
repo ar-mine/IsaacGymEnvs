@@ -9,9 +9,9 @@ from torch.optim import Adam
 
 from base.base import BaseAgent, BaseTrainer
 from base.buffer import ReplayBuffer
-from base.models import MLPDeterministicActor, MLPQFunction
+from base.models import MLPActorCritic, count_vars
 
-PATH = 'F:\\Github\\IsaacGymEnvs\\isaacgymenvs\\drl_custmaized\\experiments\\1662183040\\pyt_save\\model200.pt'
+PATH = "/home/armine/Code/IsaacGymEnvs/isaacgymenvs/drl_custmaized/experiments/1662367834/pyt_save/model200.pt"
 
 
 class DDPGAgent(BaseAgent):
@@ -28,70 +28,77 @@ class DDPGAgent(BaseAgent):
         self.buffer = ReplayBuffer(self.obs_dim, self.act_dim, self.buffer_size, self.continuous)
 
         # Network(depends on action space) and optimizer init
+        self.actor_critic = MLPActorCritic(self.obs_dim, self.act_dim, hidden_sizes=self.hidden_sizes,
+                                           act_limit=act_limit, activation=nn.ReLU, device=self.device)
+
         if not self.evaluate:
-            self.actor = MLPDeterministicActor(self.obs_dim, self.act_dim, self.hidden_sizes,
-                                               activation=nn.Tanh, act_limit=act_limit, device=self.device)
-            self.actor_t = deepcopy(self.actor)
-            self.actor_optimizer = Adam(self.actor.parameters(), lr=cfg['lr_actor'])
-            for p in self.actor_t.parameters():
+            self.actor_critic_targ = deepcopy(self.actor_critic)
+
+            # Freeze target networks with respect to optimizers (only update via polyak averaging)
+            for p in self.actor_critic_targ.parameters():
                 p.requires_grad = False
 
-            self.critic = MLPQFunction(self.obs_dim, self.act_dim, self.hidden_sizes,
-                                       activation=nn.Tanh, device=self.device)
-            self.critic_t = deepcopy(self.critic)
-            self.critic_optimizer = Adam(self.critic.parameters(), lr=cfg['lr_critic'])
-            for p in self.critic_t.parameters():
-                p.requires_grad = False
+            self.actor_optimizer = Adam(self.actor_critic.pi.parameters(), lr=cfg['lr_actor'])
+            self.critic_optimizer = Adam(self.actor_critic.q.parameters(), lr=cfg['lr_critic'])
 
-            self.logger.setup_pytorch_saver(self.actor)
+            self.logger.setup_pytorch_saver(self.actor_critic)
         else:
-            self.actor = MLPDeterministicActor(self.obs_dim, self.act_dim, self.hidden_sizes,
-                                               activation=nn.Tanh, act_limit=act_limit, device=self.device)
-            self.actor.load_state_dict(torch.load(PATH))
+            self.actor_critic.load_state_dict(torch.load(PATH))
+
+        # Count variables (protip: try to get a feel for how different size networks behave!)
+        var_counts = tuple(count_vars(module) for module in [self.actor_critic.pi, self.actor_critic.q])
+        logger.log('\nNumber of parameters: \t pi: %d, \t q: %d\n' % var_counts)
 
     def update(self, batch_size):
         data = self.buffer.sample(batch_size, self.device)
-        # Get corresponding data from sampling batch
-        obs, act, reward, obs_next, done = data["obs"], data["act"], data["reward"], data["obs_next"], data['done']
 
-        with torch.no_grad():
-            q_target = self.critic_t(obs_next, self.actor_t(obs_next))
-            targets = reward + self.gamma * (1 - done) * q_target
         # Update Q-function
         self.critic_optimizer.zero_grad()
-        loss_critic = self._compute_loss_critic(obs, act, targets)
+        loss_critic = self._compute_loss_critic(data)
         loss_critic.backward()
         self.critic_optimizer.step()
 
         # Record loss-critic
         self.logger.store(LossC=loss_critic.item())
 
+        for p in self.actor_critic.q.parameters():
+            p.requires_grad = False
+
         # Gradient ascent for actor
         self.actor_optimizer.zero_grad()
-        loss_actor = self._compute_loss_actor(obs)
+        loss_actor = self._compute_loss_actor(data)
         loss_actor.backward()
         self.actor_optimizer.step()
 
         # Record loss-actor
         self.logger.store(LossA=loss_actor.item())
 
+        for p in self.actor_critic.q.parameters():
+            p.requires_grad = True
+
         # Soft update
         self.soft_update()
 
-    def _compute_loss_actor(self, obs):
-        q_value = self.critic(obs, self.actor(obs))
+    def _compute_loss_actor(self, data):
+        obs = data["obs"]
+        q_value = self.actor_critic.q(obs, self.actor_critic.pi(obs))
         return -q_value.mean()
 
-    def _compute_loss_critic(self, obs, act, targets):
-        q = self.critic(obs, act)
+    def _compute_loss_critic(self, data):
+        obs, act, reward, obs_next, done = data["obs"], data["act"], data["reward"], data["obs_next"], data['done']
+        q = self.actor_critic.q(obs, act)
+        with torch.no_grad():
+            q_target = self.actor_critic_targ.q(obs_next, self.actor_critic_targ.pi(obs_next))
+            targets = reward + self.gamma * (1 - done) * q_target
         msbe_loss = (q - targets) ** 2
         return msbe_loss.mean()
 
-    def get_action(self, obs, noise_scale):
+    def get_action(self, obs, noise_scale=None):
         obs = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
         with torch.no_grad():
-            act = self.actor(obs)
+            act = self.actor_critic.pi(obs)
             if not self.evaluate:
+                assert noise_scale is not None, "Train model needs noise_scale parameters."
                 act += noise_scale * torch.randn(self.act_dim)
                 act[act < self.act_limit[0]] = self.act_limit[0]
                 act[act > self.act_limit[1]] = self.act_limit[1]
@@ -99,11 +106,7 @@ class DDPGAgent(BaseAgent):
 
     def soft_update(self):
         with torch.no_grad():
-            for p, p_targ in zip(self.actor.parameters(), self.actor_t.parameters()):
-                p_targ.data.mul_(self.sync_factor)
-                p_targ.data.add_((1 - self.sync_factor) * p.data)
-
-            for p, p_targ in zip(self.critic.parameters(), self.critic_t.parameters()):
+            for p, p_targ in zip(self.actor_critic.parameters(), self.actor_critic_targ.parameters()):
                 p_targ.data.mul_(self.sync_factor)
                 p_targ.data.add_((1 - self.sync_factor) * p.data)
 
@@ -155,16 +158,15 @@ class DDPGTrainer(BaseTrainer):
                 self.env.render()
 
             # Act in the environment
-            if t > self.epoch_length:
-                act = self.agent.get_action(obs, noise_scale=0.01)
+            if t > 2*self.epoch_length:
+                act = self.agent.get_action(obs, noise_scale=0.1)
             else:
                 act = self.env.action_space.sample()
             obs_next, reward, done, *info = self.env.step(act)
 
             # Modify the reward based on specific task
             # reward_fine = self.reward_modify(obs, obs_next)
-            reward_fine = (reward + 8) / 8
-            reward = reward_fine
+            reward_fine = reward
 
             # Record experience
             self.agent.buffer.store(obs=obs, act=act, reward=reward_fine, obs_next=obs_next, done=done)

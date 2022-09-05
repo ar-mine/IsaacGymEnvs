@@ -6,7 +6,7 @@ from models import combined_shape
 
 class BaseBuffer:
     def __init__(self, obs_dim, act_dim, buffer_size, continuous: bool):
-        self.ptr, self.buffer_size = 0, buffer_size
+        self.ptr, self.size, self.buffer_size = 0, 0, buffer_size
 
         self.data = {'obs': np.zeros(combined_shape(buffer_size, obs_dim), dtype=np.float32)}
         if continuous:
@@ -17,24 +17,24 @@ class BaseBuffer:
         self.data['obs_next'] = np.zeros(combined_shape(buffer_size, obs_dim), dtype=np.float32)
 
     def store(self, **kwargs):
-        # Overwrite the old data when the buffer is full
-        if self.ptr == self.buffer_size:
-            self.ptr = 0
-
         for k in kwargs.keys():
             self.data[k][self.ptr] = kwargs[k]
-        self.ptr += 1
+
+        # Overwrite the old data when data is more than buffer size
+        self.ptr = (self.ptr + 1) % self.buffer_size
+        # Represent how much data is available
+        self.size = min(self.size + 1, self.buffer_size)
 
 
 class ReplayBuffer(BaseBuffer):
-    def __init__(self, obs_dim, act_dim, buffer_size, continuous: bool):
+    def __init__(self, obs_dim, act_dim, buffer_size, continuous: bool = True):
         super(ReplayBuffer, self).__init__(obs_dim, act_dim, buffer_size, continuous)
         self.data['done'] = np.zeros(buffer_size, dtype=np.float32)
 
-    def sample(self, batch_size, device):
+    def sample(self, batch_size, device=torch.device("cpu")):
         # Sample batch from current size or all memory
 
-        sample_index = np.random.choice(self.ptr, size=batch_size)
+        sample_index = np.random.choice(self.size, size=batch_size)
 
         batch_data = {}
         for k in self.data.keys():
